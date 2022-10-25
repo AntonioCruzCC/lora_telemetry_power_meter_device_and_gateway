@@ -21,7 +21,9 @@ FirebaseData fbdo;
 FirebaseAuth auth;
 FirebaseConfig config;
 
-char timestamp[21];
+char timestampString[21];
+struct tm timeinfo;
+uint8_t status = 0x00;
 
 typedef struct InstantValuesPackage
 {
@@ -51,12 +53,12 @@ typedef struct InstantValuesPackage
 
 void updateTimestamp()
 {
-  struct tm timeinfo;
   if(!getLocalTime(&timeinfo)){
     updateTimestamp();
     return;
   }
-  strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", &timeinfo);
+  Serial.print(&timeinfo);
+  strftime(timestampString, sizeof(timestampString), "%Y-%m-%dT%H:%M:%SZ", &timeinfo);
 }
 
 static void saveInstantValuesToFirestore(InstantValuesPackage pck){
@@ -86,7 +88,7 @@ static void saveInstantValuesToFirestore(InstantValuesPackage pck){
 
   content.set("fields/Temp/doubleValue", pck.temp);
   content.set("fields/Freq/doubleValue", pck.freq);
-  content.set("fields/LastUpdate/timestampValue", String(timestamp));
+  content.set("fields/LastUpdate/timestampValue", String(timestampString));
 
   if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "VA,VB,VC,IA,IB,IC,WA,WB,WC,QA,QB,QC,FPA,FPB,FPC,Temp,Freq,LastUpdate")){
     Serial.printf("ok\n%s\n\n", fbdo.payload().c_str());
@@ -133,7 +135,7 @@ InstantValuesPackage parseInstantValues(uint8_t data[]){
     package.freq = byteArrayToFloat(data, 184);
 
     return package;
-}    
+}
 
 static void handleInstantValuesPackage(uint8_t data[]){
   InstantValuesPackage pck = parseInstantValues(data);
@@ -144,6 +146,30 @@ static void handleInstantValuesPackage(uint8_t data[]){
   Serial.printf("FPA: %f FPB: %f FPC: %f\n", pck.FPA, pck.FPB, pck.FPC);
   Serial.printf("TEMP: %f FREQ: %f\n", pck.temp, pck.freq);
   saveInstantValuesToFirestore(pck);
+}
+
+void generateReturn(uint8_t table){
+  Serial.printf("Generating return for table: %x with status: %x\n", table, status);
+  uint8_t request[12];
+
+  request[0] = 0xAA;
+  request[1] = table;
+  request[2] = status;
+  request[3] = timeinfo.tm_mday;
+  request[4] = timeinfo.tm_mon;
+  request[5] = timeinfo.tm_year - 100;
+  request[6] = timeinfo.tm_wday + 1;
+  request[7] = timeinfo.tm_hour;
+  request[8] = timeinfo.tm_min;
+  request[9] = timeinfo.tm_sec;
+  request[10] = 0xA1;
+
+  uint8_t check = 0x00;
+  for (int i = 1; i < 10; i++){
+      check += request[i];
+  }
+  request[11] = check;
+  Serial2.write(request, 12);
 }
 
 void configureWifi(){
@@ -168,6 +194,23 @@ void configureFirebase(){
   Firebase.begin(&config, &auth);
   Firebase.reconnectWiFi(true);
 }
+void handleUART(){
+    uint8_t data[262];
+    int len = Serial2.readBytes(data, 262);
+    if(len == 262){
+      Serial.printf("Package received, table: %x\n", data[2]);
+      if(data[2] == 0x14){
+        status = 0x02;
+        generateReturn(data[2]);
+        handleInstantValuesPackage(data);
+      }else{
+        status = 0x00;
+      }
+      Serial2.flush();
+    }else if(len >= 3){
+      Serial.printf("Package received, table: %x\n", data[2]);
+    }
+}
 
 void setup() {
   Serial.begin(9600);
@@ -176,17 +219,6 @@ void setup() {
   configureWifi();
   configureFirebase();
   updateTimestamp();
-}
-
-void handleUART(){
-    uint8_t data[262];
-    int len = Serial2.readBytes(data, 262);
-    if(len == 262){
-      if(data[2] == 0x14){
-        handleInstantValuesPackage(data);
-      }
-      Serial2.flush();
-    }
 }
 
 void loop() {
