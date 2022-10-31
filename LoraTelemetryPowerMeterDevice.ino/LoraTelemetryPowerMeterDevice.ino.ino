@@ -80,6 +80,7 @@ void setTime(const char *epoch){
     time_t now = stringToTime(epoch);
     timeinfo = *localtime(&now);
     isTimeSet = true;
+    delay(2000);
     displayText("Awaiting Packages");
 }
 
@@ -95,11 +96,22 @@ void handleLora(){
 }
 
 void sendPacketToGateway(uint8_t data[]){
-  sprintf(string, "Sending packet\n table: %x", data[2]);;
+  sprintf(string, "Sending packet\n table: %x", data[2]);
+  displayText(string);
+  //Have to divide the packet in two
+  uint8_t data1[132];
+  uint8_t data2[132];
+  data1[0] = 0x01;
+  data2[0] = 0x02;
+  memcpy(data1 + 1, &data[0], 131);
+  memcpy(data2 + 1, &data[131], 131);
 
   LoRa.beginPacket();
-  LoRa.print("pck:");
-  LoRa.write(data, sizeof(data));
+  LoRa.write(data1, sizeof(data1));
+  LoRa.endPacket();
+  delay(10000);
+  LoRa.beginPacket();
+  LoRa.write(data2, sizeof(data2));
   LoRa.endPacket();
 
   displayText("Package Sent");
